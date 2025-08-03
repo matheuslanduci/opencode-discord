@@ -1,9 +1,9 @@
 # Introduction
 
-This repository is a Discord bot designed to [INSERT YOUR PURPOPSE HERE]. It is
-built with Typescript and Bun, leveraging the power of the Discord.js and Sunar 
-(a framework built on top of Discord.js) libraries to provide a rich and 
-interactive experience for users.
+This repository is a Discord bot designed to interact with opencode coding
+agent. It is built with Typescript and Bun, leveraging the power of the
+Discord.js and Sunar (a framework built on top of Discord.js) libraries to
+provide a rich and interactive experience for users.
 
 ## Technology Stack
 

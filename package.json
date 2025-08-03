@@ -11,7 +11,7 @@
 		"@types/bun": "^1.2.19",
 		"esbuild": "^0.25.8"
 	},
-	"name": "vibecoding-discord-template",
+	"name": "opencode-discord",
 	"scripts": {
 		"dev": "bun --watch src/main.ts",
 		"format": "biome format",
