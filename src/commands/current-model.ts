@@ -1,3 +1,4 @@
+import { MessageFlags } from 'discord.js'
 import { execute, Slash } from 'sunar'
 import { modelsService } from '../services/models'
 import { getUserModel } from './model'
@@ -19,13 +20,13 @@ execute(slash, async (interaction) => {
 		return interaction.reply({
 			content:
 				'❌ Could not find your current model. Use `/model` to select one.',
-			ephemeral: true
+			flags: MessageFlags.Ephemeral
 		})
 	}
 
 	interaction.reply({
 		content: `🤖 **Current Model**: ${model.name} (\`${model.id}\`)\n${model.description}`,
-		ephemeral: true
+		flags: MessageFlags.Ephemeral
 	})
 })
 

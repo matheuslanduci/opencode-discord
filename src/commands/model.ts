@@ -1,4 +1,4 @@
-import { ApplicationCommandOptionType } from 'discord.js'
+import { ApplicationCommandOptionType, MessageFlags } from 'discord.js'
 import { Autocomplete, execute, Slash } from 'sunar'
 import { modelsService } from '../services/models'
 
@@ -33,7 +33,7 @@ execute(slash, async (interaction) => {
 		return interaction.reply({
 			content:
 				'❌ Invalid model selected. Use `/models` to see available options.',
-			ephemeral: true
+			flags: MessageFlags.Ephemeral
 		})
 	}
 
@@ -42,7 +42,7 @@ execute(slash, async (interaction) => {
 
 	interaction.reply({
 		content: `✅ Model updated to **${model.name}** (\`${model.id}\`)\n${model.description}`,
-		ephemeral: true
+		flags: MessageFlags.Ephemeral
 	})
 })
 

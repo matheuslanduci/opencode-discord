@@ -60,8 +60,11 @@ execute(signal, async (message) => {
 				sessionMonitor.addSession(thread.id, sessionId)
 
 				console.log(
-					`Created opencode session ${sessionId} for thread ${thread.id}`
+					`[THREAD] Created opencode session ${sessionId} for thread ${thread.id}`
 				)
+				console.log(`[THREAD] Thread name: ${thread.name}, Thread type: ${thread.type}`)
+			} else {
+				console.log(`[THREAD] Using existing session ${sessionId} for thread ${thread.id}`)
 			}
 
 			// Clean user message by removing bot mentions

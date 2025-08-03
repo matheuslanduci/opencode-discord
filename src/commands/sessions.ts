@@ -1,3 +1,4 @@
+import { MessageFlags } from 'discord.js'
 import { execute, Slash } from 'sunar'
 import { sessionMonitor } from '../services/session-monitor'
 
@@ -14,7 +15,7 @@ execute(slash, async (interaction) => {
 	if (activeCount === 0) {
 		await interaction.reply({
 			content: 'No active sessions are being monitored.',
-			ephemeral: true
+			flags: MessageFlags.Ephemeral
 		})
 		return
 	}
@@ -33,7 +34,7 @@ execute(slash, async (interaction) => {
 
 	await interaction.reply({
 		content: `**Active Sessions (${activeCount})** - ${monitoringMode}\n\n${sessionList}`,
-		ephemeral: true
+		flags: MessageFlags.Ephemeral
 	})
 })
 

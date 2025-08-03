@@ -8,53 +8,21 @@ interface SessionData {
 	lastMessageCount: number
 	lastChecked: Date
 	completedMessages: Set<string> // Track completed message IDs
+	partialMessages: Map<string, string> // Track partial message content by message ID
 }
 
 interface OpenCodeMessage {
 	info: {
 		id: string
 		role: 'user' | 'assistant'
-		system?: string[]
-		mode?: string
-		path?: Record<string, string>
-		cost?: number
-		tokens?: {
-			input?: number
-			output?: number
-			reasoning?: number
-			cache?: {
-				read?: number
-				write?: number
-			}
-		}
-		modelID?: string
-		providerID?: string
 		time?: {
 			created?: number
 			completed?: number
 		}
-		sessionID?: string
 	}
 	parts: Array<{
-		id: string
-		messageID: string
-		sessionID: string
 		type: string
 		text?: string
-		time?: {
-			start?: number
-			end?: number
-		}
-		tokens?: {
-			input?: number
-			output?: number
-			reasoning?: number
-			cache?: {
-				read?: number
-				write?: number
-			}
-		}
-		cost?: number
 	}>
 }
 
@@ -117,15 +85,18 @@ class SessionMonitor {
 			completedMessages: new Set(),
 			lastChecked: new Date(),
 			lastMessageCount: 0,
+			partialMessages: new Map(),
 			sessionId,
 			threadId
 		})
-		console.log(`Added session ${sessionId} for thread ${threadId} to monitor`)
+		console.log(`[SESSION] Added session ${sessionId} for thread ${threadId} to monitor`)
+		console.log(`[SESSION] Total active sessions: ${this.sessions.size}`)
 	}
 
 	removeSession(sessionId: string): void {
 		this.sessions.delete(sessionId)
-		console.log(`Removed session ${sessionId} from monitor`)
+		console.log(`[SESSION] Removed session ${sessionId} from monitor`)
+		console.log(`[SESSION] Total active sessions: ${this.sessions.size}`)
 	}
 
 	private async startEventStream(): Promise<void> {
@@ -210,9 +181,11 @@ class SessionMonitor {
 		if (line.startsWith('data: ')) {
 			try {
 				const eventData = JSON.parse(line.substring(6))
+				console.log(`[DEBUG] Processing event: ${eventData.type}`)
 				await this.handleEvent(eventData)
 			} catch (error) {
 				console.error('Failed to parse event data:', error)
+				console.error('Raw line:', line)
 			}
 		}
 	}
@@ -225,6 +198,9 @@ class SessionMonitor {
 			properties?.info?.sessionID ||
 			properties?.part?.sessionID ||
 			properties?.sessionID
+		
+		console.log(`[DEBUG] Received event: ${type}, sessionId: ${sessionId}, monitoring: ${this.sessions.has(sessionId || '')}`)
+		
 		if (!sessionId || !this.sessions.has(sessionId)) {
 			return
 		}
@@ -234,10 +210,10 @@ class SessionMonitor {
 				await this.handleMessageUpdated(sessionId, properties)
 				break
 			case 'message.part.updated':
-				// We don't handle part updates since we wait for message completion
+				await this.handleMessagePartUpdated(sessionId, properties)
 				break
 			default:
-				// Ignore other event types
+				console.log(`[DEBUG] Ignoring event type: ${type}`)
 				break
 		}
 	}
@@ -249,6 +225,8 @@ class SessionMonitor {
 		const messageInfo = properties.info
 		if (!messageInfo || messageInfo.role !== 'assistant') return
 
+		console.log(`[DEBUG] Message updated - messageID: ${messageInfo.id}, completed: ${!!messageInfo.time?.completed}`)
+
 		// Check if message is completed (has time.completed)
 		if (
 			messageInfo.time?.completed &&
@@ -258,12 +236,67 @@ class SessionMonitor {
 				`Assistant message ${messageInfo.id} completed for session ${sessionId}`
 			)
 
-			// Mark message as completed
+			// Mark message as completed and send any remaining partial content
 			const sessionData = this.sessions.get(sessionId)
 			if (sessionData) {
 				sessionData.completedMessages.add(messageInfo.id)
-				// Send the completed message to Discord
-				await this.sendCompletedMessage(sessionData, messageInfo.id)
+
+				// Send any remaining partial content first
+				const remainingContent = sessionData.partialMessages.get(messageInfo.id)
+				console.log(`[DEBUG] Remaining content length: ${remainingContent?.length || 0}`)
+				
+				if (remainingContent?.trim()) {
+					console.log(`[DEBUG] Sending final remaining content`)
+					await this.sendPartialMessage(sessionData, remainingContent)
+				}
+
+				sessionData.partialMessages.delete(messageInfo.id) // Clean up partial content
+				console.log(`[DEBUG] Message ${messageInfo.id} processing completed`)
+			}
+		}
+	}
+
+	private async handleMessagePartUpdated(
+		sessionId: string,
+		properties: EventStreamEvent['properties']
+	): Promise<void> {
+		const partInfo = properties.part
+		if (!partInfo || partInfo.type !== 'text' || !partInfo.text) return
+
+		console.log(`[DEBUG] Part updated - messageID: ${partInfo.messageID}, text length: ${partInfo.text.length}`)
+
+		const sessionData = this.sessions.get(sessionId)
+		if (!sessionData) return
+
+		// Skip if this message is already completed
+		if (sessionData.completedMessages.has(partInfo.messageID)) return
+
+		// Get current partial content for this message
+		const currentContent =
+			sessionData.partialMessages.get(partInfo.messageID) || ''
+		const newContent = currentContent + partInfo.text
+
+		// Update the partial content
+		sessionData.partialMessages.set(partInfo.messageID, newContent)
+
+		console.log(`[DEBUG] Updated partial content for message ${partInfo.messageID}, total length: ${newContent.length}`)
+
+		// Check if the new content contains newlines that we haven't sent yet
+		const lines = newContent.split('\n')
+		if (lines.length > 1) {
+			// We have complete lines to send (all but the last incomplete line)
+			const completeLinesContent = lines.slice(0, -1).join('\n')
+			const remainingContent = lines[lines.length - 1]
+
+			console.log(`[DEBUG] Found ${lines.length - 1} complete lines to send`)
+
+			// Update partial content to only keep the remaining incomplete line
+			sessionData.partialMessages.set(partInfo.messageID, remainingContent)
+
+			// Send the complete lines to Discord
+			if (completeLinesContent.trim()) {
+				console.log(`[DEBUG] Sending partial message with ${completeLinesContent.length} characters`)
+				await this.sendPartialMessage(sessionData, completeLinesContent)
 			}
 		}
 	}
@@ -288,7 +321,7 @@ class SessionMonitor {
 				return
 			}
 
-			const message = messageResult.data
+			const message = messageResult.data as OpenCodeMessage
 			if (!message || message.info.role !== 'assistant') return
 
 			// Find the thread
@@ -317,6 +350,50 @@ class SessionMonitor {
 			}
 		} catch (error) {
 			console.error(`Error sending completed message ${messageId}:`, error)
+		}
+	}
+
+	private async sendPartialMessage(
+		sessionData: SessionData,
+		content: string
+	): Promise<void> {
+		if (!this.client) {
+			console.log('[DEBUG] No client available for sending partial message')
+			return
+		}
+
+		try {
+			console.log(`[DEBUG] Attempting to send partial message to thread ${sessionData.threadId}`)
+			
+			// Find the thread
+			const thread = (await this.client.channels.fetch(
+				sessionData.threadId
+			)) as ThreadChannel
+
+			if (!thread) {
+				console.warn(
+					`Thread ${sessionData.threadId} not found, removing session ${sessionData.sessionId}`
+				)
+				this.removeSession(sessionData.sessionId)
+				return
+			}
+
+			console.log(`[DEBUG] Found thread: ${thread.name}`)
+
+			if (content.trim()) {
+				// Split long messages to avoid Discord's 2000 character limit
+				const messageChunks = this.splitMessage(content, 2000)
+
+				console.log(`[DEBUG] Sending ${messageChunks.length} message chunks`)
+
+				for (const chunk of messageChunks) {
+					console.log(`[DEBUG] Sending chunk with ${chunk.length} characters`)
+					await thread.send(chunk)
+					console.log(`[DEBUG] Chunk sent successfully`)
+				}
+			}
+		} catch (error) {
+			console.error(`Error sending partial message:`, error)
 		}
 	}
 
@@ -395,6 +472,7 @@ class SessionMonitor {
 					!sessionData.completedMessages.has(message.info.id)
 				) {
 					sessionData.completedMessages.add(message.info.id)
+					// For fallback polling, we send the complete message since we don't have streaming parts
 					await this.sendCompletedMessage(sessionData, message.info.id)
 				}
 			}
