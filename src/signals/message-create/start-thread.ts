@@ -1,4 +1,4 @@
-import { ThreadAutoArchiveDuration } from 'discord.js'
+import { ThreadAutoArchiveDuration, ChannelType } from 'discord.js'
 import { execute, Signal } from 'sunar'
 import { opencode } from '../../opencode'
 
@@ -11,6 +11,17 @@ execute(signal, async (message) => {
 	if (message.author.bot) return
 
 	if (message.mentions.has(message.client.user)) {
+		// Only allow thread creation in GuildText or GuildAnnouncement channels
+		if (
+			!message.channel ||
+			![ChannelType.GuildText, ChannelType.GuildAnnouncement].includes(
+				message.channel.type
+			)
+		) {
+			// Optionally, you can reply or log here
+			return
+		}
+
 		let thread = message.thread
 
 		if (!message.hasThread) {

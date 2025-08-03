@@ -6,7 +6,7 @@ const slash = new Slash({
 })
 
 execute(slash, (interaction) => {
-	interaction.reply('Pong!')
+	interaction.reply({ content: 'Pong!', ephemeral: true })
 })
 
 export { slash }
