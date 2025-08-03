@@ -4,6 +4,7 @@
     "": {
       "name": "vibecoding-discord-template",
       "dependencies": {
+        "@opencode-ai/sdk": "^0.3.123",
         "discord.js": "^14.21.0",
         "dotenv": "^17.2.1",
         "sunar": "^0.6.1",
@@ -104,6 +105,8 @@
     "@isaacs/brace-expansion": ["@isaacs/brace-expansion@5.0.0", "", { "dependencies": { "@isaacs/balanced-match": "^4.0.1" } }, "sha512-ZT55BDLV0yv0RBm2czMiZ+SqCGO7AvmOM3G/w2xhVPH+te0aKgFjmBvGlL1dH+ql2tgGO3MVrbb3jCKyvpgnxA=="],
 
     "@isaacs/cliui": ["@isaacs/cliui@8.0.2", "", { "dependencies": { "string-width": "^5.1.2", "string-width-cjs": "npm:string-width@^4.2.0", "strip-ansi": "^7.0.1", "strip-ansi-cjs": "npm:strip-ansi@^6.0.1", "wrap-ansi": "^8.1.0", "wrap-ansi-cjs": "npm:wrap-ansi@^7.0.0" } }, "sha512-O8jcjabXaleOG9DQ0+ARXWZBTfnP4WNAqzuiJK7ll44AmxGKv/J2M4TPjxjY3znBCfvBXFzucm1twdyFybFqEA=="],
+
+    "@opencode-ai/sdk": ["@opencode-ai/sdk@0.3.123", "", {}, "sha512-63XU93FPFE4x5TiANvqn5hfXlLAL4BRHTypwiOvPIftOGhIupuiss5wNzJWUaVPKTEOm/8eD4o1UJrmvTHe9Fw=="],
 
     "@sapphire/async-queue": ["@sapphire/async-queue@1.5.5", "", {}, "sha512-cvGzxbba6sav2zZkH8GPf2oGk9yYoD5qrNWdu9fRehifgnFZJMV+nuy2nON2roRO4yQQ+v7MK/Pktl/HgfsUXg=="],
 

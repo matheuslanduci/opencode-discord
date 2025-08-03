@@ -1,5 +1,6 @@
 {
 	"dependencies": {
+		"@opencode-ai/sdk": "^0.3.123",
 		"discord.js": "^14.21.0",
 		"dotenv": "^17.2.1",
 		"sunar": "^0.6.1",

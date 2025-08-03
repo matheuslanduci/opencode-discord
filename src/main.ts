@@ -15,7 +15,7 @@ const components = [
 
 async function main() {
 	const client = new Client({
-		intents: []
+		intents: ['Guilds', 'GuildMessages', 'MessageContent']
 	})
 
 	const mainFolder = process.env.NODE_ENV === 'production' ? 'dist' : 'src'
