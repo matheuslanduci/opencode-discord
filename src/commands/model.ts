@@ -1,6 +1,6 @@
 import { ApplicationCommandOptionType } from 'discord.js'
 import { Autocomplete, execute, Slash } from 'sunar'
-import { GITHUB_COPILOT_MODELS } from './models'
+import { modelsService } from '../services/models'
 
 // In-memory storage for selected models per user
 const userModels = new Map<string, string>()
@@ -19,11 +19,15 @@ const slash = new Slash({
 	]
 })
 
-execute(slash, (interaction) => {
+execute(slash, async (interaction) => {
 	const selectedModel = interaction.options.getString('model', true)
 
+	// Ensure models are loaded
+	await modelsService.ensureInitialized()
+	const models = modelsService.getModels()
+
 	// Find the model in our list
-	const model = GITHUB_COPILOT_MODELS.find((m) => m.id === selectedModel)
+	const model = models.find((m) => m.id === selectedModel)
 
 	if (!model) {
 		return interaction.reply({
@@ -47,15 +51,21 @@ const autocomplete = new Autocomplete({
 	name: 'model'
 })
 
-execute(autocomplete, (interaction, option) => {
+execute(autocomplete, async (interaction, option) => {
 	const query = option.value.toLowerCase()
 
+	// Ensure models are loaded
+	await modelsService.ensureInitialized()
+	const models = modelsService.getModels()
+
 	// Filter models based on the user's input
-	const filteredModels = GITHUB_COPILOT_MODELS.filter(
-		(model) =>
-			model.id.toLowerCase().includes(query) ||
-			model.name.toLowerCase().includes(query)
-	).slice(0, 25) // Discord limits to 25 autocomplete options
+	const filteredModels = models
+		.filter(
+			(model) =>
+				model.id.toLowerCase().includes(query) ||
+				model.name.toLowerCase().includes(query)
+		)
+		.slice(0, 25) // Discord limits to 25 autocomplete options
 
 	// Format for Discord autocomplete
 	const choices = filteredModels.map((model) => ({

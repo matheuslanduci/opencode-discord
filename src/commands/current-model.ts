@@ -1,15 +1,19 @@
 import { execute, Slash } from 'sunar'
+import { modelsService } from '../services/models'
 import { getUserModel } from './model'
-import { GITHUB_COPILOT_MODELS } from './models'
 
 const slash = new Slash({
 	description: 'Show your currently selected model',
 	name: 'current-model'
 })
 
-execute(slash, (interaction) => {
+execute(slash, async (interaction) => {
 	const currentModelId = getUserModel(interaction.user.id)
-	const model = GITHUB_COPILOT_MODELS.find((m) => m.id === currentModelId)
+
+	// Ensure models are loaded
+	await modelsService.ensureInitialized()
+	const models = modelsService.getModels()
+	const model = models.find((m) => m.id === currentModelId)
 
 	if (!model) {
 		return interaction.reply({

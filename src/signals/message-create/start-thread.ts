@@ -2,6 +2,7 @@ import { ChannelType, ThreadAutoArchiveDuration } from 'discord.js'
 import { execute, Signal } from 'sunar'
 import { getUserModel } from '../../commands/model'
 import { opencode } from '../../opencode'
+import { sessionMonitor } from '../../services/session-monitor'
 
 const signal = new Signal('messageCreate')
 
@@ -54,6 +55,10 @@ execute(signal, async (message) => {
 				}
 
 				threadSessions.set(thread.id, sessionId)
+
+				// Add session to monitor for continuous listening
+				sessionMonitor.addSession(thread.id, sessionId)
+
 				console.log(
 					`Created opencode session ${sessionId} for thread ${thread.id}`
 				)
