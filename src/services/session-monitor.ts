@@ -89,7 +89,9 @@ class SessionMonitor {
 			sessionId,
 			threadId
 		})
-		console.log(`[SESSION] Added session ${sessionId} for thread ${threadId} to monitor`)
+		console.log(
+			`[SESSION] Added session ${sessionId} for thread ${threadId} to monitor`
+		)
 		console.log(`[SESSION] Total active sessions: ${this.sessions.size}`)
 	}
 
@@ -181,7 +183,10 @@ class SessionMonitor {
 		if (line.startsWith('data: ')) {
 			try {
 				const eventData = JSON.parse(line.substring(6))
-				console.log(`[DEBUG] Processing event: ${eventData.type}`)
+				// Reduce log noise - only log important events
+				if (eventData.type !== 'storage.write') {
+					console.log(`[DEBUG] Processing event: ${eventData.type}`)
+				}
 				await this.handleEvent(eventData)
 			} catch (error) {
 				console.error('Failed to parse event data:', error)
@@ -193,14 +198,19 @@ class SessionMonitor {
 	private async handleEvent(event: EventStreamEvent): Promise<void> {
 		const { type, properties } = event
 
+		// Skip storage.write events - they're just noise
+		if (type === 'storage.write') return
+
 		// Only handle events for sessions we're monitoring
 		const sessionId =
 			properties?.info?.sessionID ||
 			properties?.part?.sessionID ||
 			properties?.sessionID
-		
-		console.log(`[DEBUG] Received event: ${type}, sessionId: ${sessionId}, monitoring: ${this.sessions.has(sessionId || '')}`)
-		
+
+		console.log(
+			`[DEBUG] Received event: ${type}, sessionId: ${sessionId}, monitoring: ${this.sessions.has(sessionId || '')}`
+		)
+
 		if (!sessionId || !this.sessions.has(sessionId)) {
 			return
 		}
@@ -225,7 +235,9 @@ class SessionMonitor {
 		const messageInfo = properties.info
 		if (!messageInfo || messageInfo.role !== 'assistant') return
 
-		console.log(`[DEBUG] Message updated - messageID: ${messageInfo.id}, completed: ${!!messageInfo.time?.completed}`)
+		console.log(
+			`[DEBUG] Message updated - messageID: ${messageInfo.id}, completed: ${!!messageInfo.time?.completed}`
+		)
 
 		// Check if message is completed (has time.completed)
 		if (
@@ -243,8 +255,10 @@ class SessionMonitor {
 
 				// Send any remaining partial content first
 				const remainingContent = sessionData.partialMessages.get(messageInfo.id)
-				console.log(`[DEBUG] Remaining content length: ${remainingContent?.length || 0}`)
-				
+				console.log(
+					`[DEBUG] Remaining content length: ${remainingContent?.length || 0}`
+				)
+
 				if (remainingContent?.trim()) {
 					console.log(`[DEBUG] Sending final remaining content`)
 					await this.sendPartialMessage(sessionData, remainingContent)
@@ -263,7 +277,9 @@ class SessionMonitor {
 		const partInfo = properties.part
 		if (!partInfo || partInfo.type !== 'text' || !partInfo.text) return
 
-		console.log(`[DEBUG] Part updated - messageID: ${partInfo.messageID}, text length: ${partInfo.text.length}`)
+		console.log(
+			`[DEBUG] Part updated - messageID: ${partInfo.messageID}, text length: ${partInfo.text.length}`
+		)
 
 		const sessionData = this.sessions.get(sessionId)
 		if (!sessionData) return
@@ -279,7 +295,9 @@ class SessionMonitor {
 		// Update the partial content
 		sessionData.partialMessages.set(partInfo.messageID, newContent)
 
-		console.log(`[DEBUG] Updated partial content for message ${partInfo.messageID}, total length: ${newContent.length}`)
+		console.log(
+			`[DEBUG] Updated partial content for message ${partInfo.messageID}, total length: ${newContent.length}`
+		)
 
 		// Check if the new content contains newlines that we haven't sent yet
 		const lines = newContent.split('\n')
@@ -295,7 +313,9 @@ class SessionMonitor {
 
 			// Send the complete lines to Discord
 			if (completeLinesContent.trim()) {
-				console.log(`[DEBUG] Sending partial message with ${completeLinesContent.length} characters`)
+				console.log(
+					`[DEBUG] Sending partial message with ${completeLinesContent.length} characters`
+				)
 				await this.sendPartialMessage(sessionData, completeLinesContent)
 			}
 		}
@@ -363,8 +383,10 @@ class SessionMonitor {
 		}
 
 		try {
-			console.log(`[DEBUG] Attempting to send partial message to thread ${sessionData.threadId}`)
-			
+			console.log(
+				`[DEBUG] Attempting to send partial message to thread ${sessionData.threadId}`
+			)
+
 			// Find the thread
 			const thread = (await this.client.channels.fetch(
 				sessionData.threadId
