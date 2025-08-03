@@ -13,7 +13,7 @@
 	},
 	"files": {
 		"ignoreUnknown": false,
-		"includes": ["**/*.ts"]
+		"includes": ["**/*.ts", "**/*.json"]
 	},
 	"formatter": {
 		"enabled": true,
