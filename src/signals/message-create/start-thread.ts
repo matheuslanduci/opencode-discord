@@ -1,5 +1,6 @@
-import { ThreadAutoArchiveDuration, ChannelType } from 'discord.js'
+import { ChannelType, ThreadAutoArchiveDuration } from 'discord.js'
 import { execute, Signal } from 'sunar'
+import { getUserModel } from '../../commands/model'
 import { opencode } from '../../opencode'
 
 const signal = new Signal('messageCreate')
@@ -61,10 +62,13 @@ execute(signal, async (message) => {
 			// Clean user message by removing bot mentions
 			const userMessage = message.content.replace(/<@!?\d+>/g, '').trim()
 
+			// Get the user's selected model
+			const selectedModel = getUserModel(message.author.id)
+
 			// Send the user's message to the opencode session
 			const chatResult = await opencode.session.chat({
 				body: {
-					modelID: 'gpt-4.1',
+					modelID: selectedModel,
 					parts: [
 						{
 							text: userMessage,
