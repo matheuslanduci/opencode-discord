@@ -4,7 +4,7 @@ import { Console, Effect } from 'effect'
 import { execute, Slash } from 'sunar'
 import { AppRuntime } from '~/app-runtime'
 import { DiscordError } from '~/discord'
-import { Opencode, type OpencodeError } from '~/opencode'
+import { Opencode } from '~/opencode'
 
 const slash = new Slash({
 	description: 'Get sessions',
@@ -28,9 +28,8 @@ execute(slash, async (interaction) =>
 			})
 		}).pipe(
 			Effect.catchTags({
-				DiscordError: (error: DiscordError) =>
-					Console.error('Discord error:', error.message),
-				OpencodeError: (error: OpencodeError) =>
+				DiscordError: (error) => Console.error('Discord error:', error.message),
+				OpencodeError: (error) =>
 					Effect.promise(() =>
 						interaction.reply({
 							content: error.message,

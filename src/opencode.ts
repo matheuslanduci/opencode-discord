@@ -6,11 +6,24 @@ export class Opencode extends Context.Tag('Opencode')<
 	{
 		readonly createSession: () => Effect.Effect<Session, OpencodeError>
 		readonly getSessions: () => Effect.Effect<Session[], OpencodeError>
+		readonly getSession: (
+			sessionId: string
+		) => Effect.Effect<Session, OpencodeError | SessionNotFoundError>
+		readonly send: (
+			sessionId: string,
+			content: string
+		) => Effect.Effect<void, OpencodeError | SessionNotFoundError>
 	}
 >() {}
 
 export class OpencodeError extends Data.TaggedError('OpencodeError')<{
 	message: string
+}> {}
+
+export class SessionNotFoundError extends Data.TaggedError(
+	'SessionNotFoundError'
+)<{
+	sessionId: string
 }> {}
 
 export const OpencodeLive = Layer.effect(
@@ -22,31 +35,76 @@ export const OpencodeLive = Layer.effect(
 			baseUrl: url
 		})
 
-		return Opencode.of({
-			createSession: () =>
-				Effect.tryPromise({
-					catch: () =>
-						new OpencodeError({ message: 'Failed to create session' }),
-					try: async () => {
-						const { data } = await opencode.session.create({
-							throwOnError: true
-						})
+		const getSessions = (): Effect.Effect<Session[], OpencodeError> =>
+			Effect.tryPromise({
+				catch: () => new OpencodeError({ message: 'Failed to fetch sessions' }),
+				try: async () => {
+					const { data } = await opencode.session.list({
+						throwOnError: true
+					})
 
-						return data
+					return data
+				}
+			})
+		const getSession = (
+			sessionId: string
+		): Effect.Effect<Session, OpencodeError | SessionNotFoundError> =>
+			getSessions().pipe(
+				Effect.map((sessions) => sessions.find((s) => s.id === sessionId)),
+				Effect.flatMap((session) => {
+					if (!session) {
+						return Effect.fail(new SessionNotFoundError({ sessionId }))
 					}
-				}),
-			getSessions: () =>
-				Effect.tryPromise({
-					catch: () =>
-						new OpencodeError({ message: 'Failed to fetch sessions' }),
-					try: async () => {
-						const { data } = await opencode.session.list({
-							throwOnError: true
-						})
 
-						return data
-					}
+					return Effect.succeed(session)
 				})
+			)
+		const createSession = (): Effect.Effect<Session, OpencodeError> =>
+			Effect.tryPromise({
+				catch: () => new OpencodeError({ message: 'Failed to create session' }),
+				try: async () => {
+					const { data } = await opencode.session.create({
+						throwOnError: true
+					})
+
+					return data
+				}
+			})
+		const send = (
+			sessionId: string,
+			content: string
+		): Effect.Effect<void, OpencodeError | SessionNotFoundError> =>
+			getSession(sessionId).pipe(
+				Effect.flatMap((session) =>
+					Effect.tryPromise({
+						catch: () =>
+							new OpencodeError({ message: 'Failed to send message' }),
+						try: async () => {
+							await opencode.session.chat({
+								body: {
+									modelID: 'gpt-4.1',
+									parts: [
+										{
+											text: content,
+											type: 'text'
+										}
+									],
+									providerID: 'github-copilot'
+								},
+								path: {
+									id: session.id
+								}
+							})
+						}
+					})
+				)
+			)
+
+		return Opencode.of({
+			createSession,
+			getSession,
+			getSessions,
+			send
 		})
 	})
 )

@@ -1,6 +1,6 @@
 {
 	"dependencies": {
-		"@opencode-ai/sdk": "^0.3.123",
+		"@opencode-ai/sdk": "^0.3.128",
 		"discord.js": "^14.21.0",
 		"dotenv": "^17.2.1",
 		"effect": "^3.17.6",
