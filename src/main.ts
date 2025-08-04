@@ -3,8 +3,6 @@ import { Config, Effect } from 'effect'
 import { Client, load } from 'sunar'
 import { AppRuntime } from './app-runtime'
 
-const models = ['sessions']
-
 const program = Effect.gen(function* () {
 	const token = yield* Config.string('DISCORD_BOT_TOKEN')
 	const nodeEnv = yield* Config.literal('production', 'development')('NODE_ENV')
@@ -19,7 +17,9 @@ const program = Effect.gen(function* () {
 
 	const mainFolder = nodeEnv === 'production' ? 'dist' : 'src'
 
-	yield* Effect.promise(() => load(`${mainFolder}/**/*.{slash,signal}.{js,ts}`))
+	yield* Effect.promise(() =>
+		load(`${mainFolder}/**/*.{slash,signal,button}.{js,ts}`)
+	)
 
 	yield* Effect.promise(() => client.login(token))
 })

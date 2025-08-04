@@ -3,6 +3,7 @@ import {
 	ActionRowBuilder,
 	type AnyThreadChannel,
 	type ButtonBuilder,
+	PermissionFlagsBits,
 	ThreadAutoArchiveDuration
 } from 'discord.js'
 import { Console, Effect } from 'effect'
@@ -14,6 +15,24 @@ import { createStopSessionButton } from './stop-session.button'
 
 const signal = new Signal('messageCreate')
 
+const notifyThreadAboutSession = (
+	threadChannel: AnyThreadChannel,
+	sessionId: string
+) =>
+	Effect.tryPromise({
+		catch: (err) =>
+			new DiscordError({ cause: err, message: 'Failed to send reply' }),
+		try: () =>
+			threadChannel.send({
+				components: [
+					new ActionRowBuilder<ButtonBuilder>().addComponents(
+						createStopSessionButton(sessionId)
+					)
+				],
+				content: `Process started!`
+			})
+	})
+
 execute(signal, async (message) =>
 	AppRuntime.runPromise(
 		Effect.gen(function* () {
@@ -21,12 +40,17 @@ execute(signal, async (message) =>
 
 			if (message.author.bot) return
 
+			if (!message.member?.permissions.has(PermissionFlagsBits.Administrator))
+				return
+
 			const opencode = yield* Opencode
 
 			let session: Session
 			let threadChannel: AnyThreadChannel
 
-			if (!message.thread) {
+			const isInThread = message.channel.isThread()
+
+			if (!isInThread) {
 				session = yield* opencode.createSession()
 
 				threadChannel = yield* Effect.tryPromise({
@@ -34,54 +58,33 @@ execute(signal, async (message) =>
 					try: () =>
 						message.startThread({
 							autoArchiveDuration: ThreadAutoArchiveDuration.OneWeek,
-							name: `Thread with ${message.author.username}`
+							name: `Thread with ${message.author.username} (${session.id})`
 						})
 				})
-
-				yield* Effect.tryPromise({
-					catch: () =>
-						new DiscordError({ message: 'Failed to add tag to thread' }),
-					try: () =>
-						threadChannel.setAppliedTags([
-							...(threadChannel.appliedTags ?? []),
-							`sid:${session.id}`
-						])
-				})
 			} else {
-				threadChannel = message.thread
-				const sidTag = message.thread.appliedTags.find((tag) =>
-					tag.startsWith('sid:')
-				)
+				threadChannel = message.channel as AnyThreadChannel
 
-				const [, sid] = sidTag?.split(':') ?? []
+				const sidTag = threadChannel.name.match(/Thread with .* \((\w+)\)/)?.[1]
 
-				if (!sid) {
+				if (!sidTag) {
 					return yield* new IncorrectUsageError({
 						message:
-							'Session ID not found in thread tags. Try to create a new session.'
+							'Session ID not found in thread name. Try to create a new session.'
 					})
 				}
+
+				const sid = sidTag.trim()
 
 				session = yield* opencode.getSession(sid)
 			}
 
-			yield* opencode.send(session.id, message.content.trim())
+			yield* notifyThreadAboutSession(threadChannel, session.id)
 
-			yield* Effect.tryPromise({
-				catch: () => new DiscordError({ message: 'Failed to send reply' }),
-				try: () =>
-					threadChannel.send({
-						components: [
-							new ActionRowBuilder<ButtonBuilder>().addComponents(
-								createStopSessionButton(session.id)
-							)
-						],
-						content: `Process started!`
-					})
-			})
+			yield* opencode.send(session.id, message.content.trim())
 		}).pipe(
 			Effect.catchTags({
-				DiscordError: (error) => Console.error('Discord error:', error.message),
+				DiscordError: (error) =>
+					Console.trace('Discord error:', error.message, error.cause),
 				SessionNotFoundError: (error) =>
 					Effect.promise(() =>
 						message.reply({

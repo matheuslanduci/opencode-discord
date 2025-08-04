@@ -13,6 +13,9 @@ export class Opencode extends Context.Tag('Opencode')<
 			sessionId: string,
 			content: string
 		) => Effect.Effect<void, OpencodeError | SessionNotFoundError>
+		readonly abort: (
+			sessionId: string
+		) => Effect.Effect<void, OpencodeError | SessionNotFoundError>
 	}
 >() {}
 
@@ -99,8 +102,27 @@ export const OpencodeLive = Layer.effect(
 					})
 				)
 			)
+		const abort = (
+			sessionId: string
+		): Effect.Effect<void, OpencodeError | SessionNotFoundError> =>
+			getSession(sessionId).pipe(
+				Effect.flatMap((session) =>
+					Effect.tryPromise({
+						catch: () =>
+							new OpencodeError({ message: 'Failed to abort session' }),
+						try: async () => {
+							await opencode.session.abort({
+								path: {
+									id: session.id
+								}
+							})
+						}
+					})
+				)
+			)
 
 		return Opencode.of({
+			abort,
 			createSession,
 			getSession,
 			getSessions,
