@@ -15,6 +15,38 @@ import { createStopSessionButton } from './stop-session.button'
 
 const signal = new Signal('messageCreate')
 
+function splitMessage(text: string, maxLength: number): string[] {
+	if (text.length <= maxLength) return [text]
+
+	const messages: string[] = []
+	let currentMessage = ''
+
+	const lines = text.split('\n')
+
+	for (const line of lines) {
+		if (currentMessage.length + line.length + 1 <= maxLength) {
+			currentMessage += (currentMessage ? '\n' : '') + line
+		} else {
+			if (currentMessage) {
+				messages.push(currentMessage)
+				currentMessage = line
+			} else {
+				// Line is too long, split it
+				const chunks = line.match(new RegExp(`.{1,${maxLength - 1}}`, 'g')) || [
+					line
+				]
+				messages.push(...chunks)
+			}
+		}
+	}
+
+	if (currentMessage) {
+		messages.push(currentMessage)
+	}
+
+	return messages
+}
+
 execute(signal, async (message) =>
 	AppRuntime.runPromise(
 		Effect.gen(function* () {
@@ -74,7 +106,30 @@ execute(signal, async (message) =>
 					})
 			})
 
-			yield* opencode.send(session.id, message.content.trim())
+			const response = yield* opencode.send(session.id, message.content.trim())
+
+			console.log(
+				`[THREAD] Sent message to opencode session ${session.id}:`,
+				response
+			)
+
+			yield* Effect.tryPromise({
+				catch: (err) =>
+					new DiscordError({ cause: err, message: 'Failed to send reply' }),
+				try: async () => {
+					const content = response.parts
+						.map((part) => (part.type === 'text' ? part.text : ''))
+						.join('\n')
+
+					const chunks = splitMessage(content, 2000)
+
+					for (const chunk of chunks) {
+						await threadChannel.send({
+							content: chunk
+						})
+					}
+				}
+			})
 		}).pipe(
 			Effect.catchTags({
 				DiscordError: (error) =>

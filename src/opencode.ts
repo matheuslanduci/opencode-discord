@@ -1,4 +1,10 @@
-import { createOpencodeClient, type Session } from '@opencode-ai/sdk'
+import {
+	type AssistantMessage,
+	createOpencodeClient,
+	type Message,
+	type Part,
+	type Session
+} from '@opencode-ai/sdk'
 import { Config, Context, Data, Effect, Layer } from 'effect'
 
 export class Opencode extends Context.Tag('Opencode')<
@@ -12,10 +18,20 @@ export class Opencode extends Context.Tag('Opencode')<
 		readonly send: (
 			sessionId: string,
 			content: string
-		) => Effect.Effect<void, OpencodeError | SessionNotFoundError>
+		) => Effect.Effect<AssistantMessage, OpencodeError | SessionNotFoundError>
 		readonly abort: (
 			sessionId: string
 		) => Effect.Effect<void, OpencodeError | SessionNotFoundError>
+		readonly getMessage: (
+			sessionId: string,
+			messageId: string
+		) => Effect.Effect<
+			{
+				info: Message
+				parts: Part[]
+			},
+			OpencodeError | SessionNotFoundError
+		>
 	}
 >() {}
 
@@ -76,14 +92,14 @@ export const OpencodeLive = Layer.effect(
 		const send = (
 			sessionId: string,
 			content: string
-		): Effect.Effect<void, OpencodeError | SessionNotFoundError> =>
+		): Effect.Effect<AssistantMessage, OpencodeError | SessionNotFoundError> =>
 			getSession(sessionId).pipe(
 				Effect.flatMap((session) =>
 					Effect.tryPromise({
 						catch: () =>
 							new OpencodeError({ message: 'Failed to send message' }),
 						try: async () => {
-							await opencode.session.chat({
+							const { data } = await opencode.session.chat({
 								body: {
 									modelID: 'gpt-4.1',
 									parts: [
@@ -96,8 +112,11 @@ export const OpencodeLive = Layer.effect(
 								},
 								path: {
 									id: session.id
-								}
+								},
+								throwOnError: true
 							})
+
+							return data
 						}
 					})
 				)
@@ -120,10 +139,35 @@ export const OpencodeLive = Layer.effect(
 					})
 				)
 			)
+		const getMessage = (
+			sessionId: string,
+			messageId: string
+		): Effect.Effect<
+			{
+				info: Message
+				parts: Part[]
+			},
+			OpencodeError
+		> =>
+			Effect.tryPromise({
+				catch: () => new OpencodeError({ message: 'Failed to fetch message' }),
+				try: async () => {
+					const { data } = await opencode.session.message({
+						path: {
+							id: sessionId,
+							messageID: messageId
+						},
+						throwOnError: true
+					})
+
+					return data
+				}
+			})
 
 		return Opencode.of({
 			abort,
 			createSession,
+			getMessage,
 			getSession,
 			getSessions,
 			send
