@@ -15,24 +15,6 @@ import { createStopSessionButton } from './stop-session.button'
 
 const signal = new Signal('messageCreate')
 
-const notifyThreadAboutSession = (
-	threadChannel: AnyThreadChannel,
-	sessionId: string
-) =>
-	Effect.tryPromise({
-		catch: (err) =>
-			new DiscordError({ cause: err, message: 'Failed to send reply' }),
-		try: () =>
-			threadChannel.send({
-				components: [
-					new ActionRowBuilder<ButtonBuilder>().addComponents(
-						createStopSessionButton(sessionId)
-					)
-				],
-				content: `Process started!`
-			})
-	})
-
 execute(signal, async (message) =>
 	AppRuntime.runPromise(
 		Effect.gen(function* () {
@@ -78,7 +60,19 @@ execute(signal, async (message) =>
 				session = yield* opencode.getSession(sid)
 			}
 
-			yield* notifyThreadAboutSession(threadChannel, session.id)
+			yield* Effect.tryPromise({
+				catch: (err) =>
+					new DiscordError({ cause: err, message: 'Failed to send reply' }),
+				try: () =>
+					threadChannel.send({
+						components: [
+							new ActionRowBuilder<ButtonBuilder>().addComponents(
+								createStopSessionButton(session.id)
+							)
+						],
+						content: `Process started!`
+					})
+			})
 
 			yield* opencode.send(session.id, message.content.trim())
 		}).pipe(

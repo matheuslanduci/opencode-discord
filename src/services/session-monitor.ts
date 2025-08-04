@@ -1,524 +1,276 @@
-import type { Client, ThreadChannel } from 'discord.js'
-import { env } from '../env'
-import { opencode } from '../opencode'
+import type {
+	Client,
+	NewsChannel,
+	TextChannel,
+	ThreadChannel
+} from 'discord.js'
+import {
+	Config,
+	Console,
+	Context,
+	Data,
+	Effect,
+	Layer,
+	pipe,
+	Ref,
+	Schedule
+} from 'effect'
 
 interface SessionData {
 	threadId: string
 	sessionId: string
-	lastMessageCount: number
-	lastChecked: Date
-	completedMessages: Set<string> // Track completed message IDs
-	partialMessages: Map<string, string> // Track partial message content by message ID
-}
-
-interface OpenCodeMessage {
-	info: {
-		id: string
-		role: 'user' | 'assistant'
-		time?: {
-			created?: number
-			completed?: number
-		}
-	}
-	parts: Array<{
-		type: string
-		text?: string
-	}>
 }
 
 interface EventStreamEvent {
 	type: string
 	properties: {
-		info?: {
+		sessionID?: string
+		message?: {
 			id: string
 			role: 'user' | 'assistant'
-			sessionID: string
-			time?: {
-				created?: number
-				completed?: number
-			}
+			content: string
 		}
-		part?: {
-			id: string
-			messageID: string
-			sessionID: string
-			type: string
-			text?: string
-			time?: {
-				start?: number
-				end?: number
-			}
-		}
-		sessionID?: string
-		messageID?: string
 	}
 }
 
-class SessionMonitor {
-	private sessions = new Map<string, SessionData>()
-	private client: Client | null = null
-	private eventSource: EventSource | null = null
-	private reconnectAttempts = 0
-	private readonly MAX_RECONNECT_ATTEMPTS = 5
-	private readonly RECONNECT_DELAY_MS = 5000
-	private fallbackPollInterval: NodeJS.Timeout | null = null
-	private readonly FALLBACK_POLL_INTERVAL_MS = 30000 // Fallback to polling every 30 seconds
-	private usingFallback = false
+export class SessionMonitorError extends Data.TaggedError(
+	'SessionMonitorError'
+)<{
+	message: string
+	cause?: unknown
+}> {}
 
-	initialize(client: Client): void {
-		this.client = client
-		console.log('Session monitor initialized')
+// Discord Client service tag
+export class DiscordClient extends Context.Tag('DiscordClient')<
+	DiscordClient,
+	Client
+>() {}
+
+// SessionMonitor service definition
+export class SessionMonitor extends Context.Tag('SessionMonitor')<
+	SessionMonitor,
+	{
+		readonly setDiscordClient: (
+			client: Client
+		) => Effect.Effect<void, never, never>
+		readonly addSession: (
+			threadId: string,
+			sessionId: string
+		) => Effect.Effect<void, never, never>
+		readonly removeSession: (
+			sessionId: string
+		) => Effect.Effect<void, never, never>
+		readonly start: () => Effect.Effect<void, SessionMonitorError, never>
+		readonly stop: () => Effect.Effect<void, never, never>
+		readonly getActiveSessionsCount: () => Effect.Effect<number, never, never>
+		readonly getSessionInfo: () => Effect.Effect<SessionData[], never, never>
 	}
+>() {}
 
-	start(): void {
-		if (this.eventSource || this.fallbackPollInterval) {
-			console.log('Session monitor already running')
-			return
-		}
+const makeSessionMonitor = Effect.gen(function* () {
+	const apiUrl = yield* Config.string('OPENCODE_API_URL')
 
-		this.startEventStream()
-		console.log('Session monitor started')
-	}
+	// State management with Ref
+	const sessionsRef = yield* Ref.make(new Map<string, SessionData>())
+	const isRunningRef = yield* Ref.make(false)
 
-	addSession(threadId: string, sessionId: string): void {
-		this.sessions.set(sessionId, {
-			completedMessages: new Set(),
-			lastChecked: new Date(),
-			lastMessageCount: 0,
-			partialMessages: new Map(),
-			sessionId,
-			threadId
+	// Store client reference
+	let discordClient: Client | null = null
+
+	// Helper function to set the Discord client
+	const setDiscordClient = (client: Client) =>
+		Effect.sync(() => {
+			discordClient = client
 		})
-		console.log(
-			`[SESSION] Added session ${sessionId} for thread ${threadId} to monitor`
-		)
-		console.log(`[SESSION] Total active sessions: ${this.sessions.size}`)
-	}
 
-	removeSession(sessionId: string): void {
-		this.sessions.delete(sessionId)
-		console.log(`[SESSION] Removed session ${sessionId} from monitor`)
-		console.log(`[SESSION] Total active sessions: ${this.sessions.size}`)
-	}
+	// Helper function to connect to event stream
+	const connectToEventStream = (url: string) =>
+		Effect.gen(function* () {
+			yield* Console.log('Connecting to OpenCode event stream...')
 
-	private async startEventStream(): Promise<void> {
-		try {
-			// Connect to OpenCode's event stream endpoint
-			const baseUrl = env.OPENCODE_API_URL
-			const eventUrl = `${baseUrl}/event`
-
-			await this.connectToEventStream(eventUrl)
-		} catch (error) {
-			console.error('Failed to start event stream:', error)
-			this.scheduleReconnect()
-		}
-	}
-
-	private async connectToEventStream(url: string): Promise<void> {
-		try {
-			console.log('Connecting to OpenCode event stream...')
-
-			const response = await fetch(url, {
-				headers: {
-					Accept: 'text/event-stream',
-					'Cache-Control': 'no-cache'
-				},
-				method: 'GET'
+			const response = yield* Effect.tryPromise({
+				catch: (error) =>
+					new SessionMonitorError({
+						cause: error,
+						message: 'Failed to connect to event stream'
+					}),
+				try: () =>
+					fetch(url, {
+						headers: {
+							Accept: 'text/event-stream',
+							'Cache-Control': 'no-cache'
+						},
+						method: 'GET'
+					})
 			})
 
 			if (!response.ok) {
-				throw new Error(
-					`Failed to connect to event stream: ${response.status} ${response.statusText}`
+				return yield* Effect.fail(
+					new SessionMonitorError({
+						message: `Failed to connect to event stream: ${response.status} ${response.statusText}`
+					})
 				)
 			}
 
 			if (!response.body) {
-				throw new Error('No response body from event stream')
+				return yield* Effect.fail(
+					new SessionMonitorError({
+						message: 'No response body from event stream'
+					})
+				)
 			}
 
+			yield* Console.log('Connected to OpenCode event stream')
+
+			// Process the stream
 			const reader = response.body.getReader()
 			const decoder = new TextDecoder()
 			let buffer = ''
 
-			console.log('Connected to OpenCode event stream')
-			this.reconnectAttempts = 0
-			this.usingFallback = false
+			return yield* Effect.acquireUseRelease(
+				Effect.succeed(reader),
+				(reader) =>
+					Effect.gen(function* () {
+						while (true) {
+							const result = yield* Effect.tryPromise({
+								catch: (error) =>
+									new SessionMonitorError({
+										cause: error,
+										message: 'Error reading from stream'
+									}),
+								try: () => reader.read()
+							})
 
-			// Stop fallback polling if it's running
-			if (this.fallbackPollInterval) {
-				clearInterval(this.fallbackPollInterval)
-				this.fallbackPollInterval = null
+							if (result.done) {
+								yield* Console.log('Event stream ended')
+								break
+							}
+
+							buffer += decoder.decode(result.value, { stream: true })
+							const lines = buffer.split('\n')
+							buffer = lines.pop() || ''
+
+							for (const line of lines) {
+								yield* processEventStreamLine(line)
+							}
+						}
+					}),
+				(reader) => Effect.sync(() => reader.releaseLock())
+			)
+		})
+
+	// Process individual event stream lines
+	const processEventStreamLine = (line: string) =>
+		Effect.gen(function* () {
+			if (!line.trim()) return
+
+			if (line.startsWith('data: ')) {
+				const eventData = yield* Effect.try({
+					catch: (error) =>
+						new SessionMonitorError({
+							cause: error,
+							message: 'Failed to parse event data'
+						}),
+					try: () => JSON.parse(line.substring(6)) as EventStreamEvent
+				})
+
+				yield* handleEvent(eventData)
 			}
-
-			try {
-				while (true) {
-					const { done, value } = await reader.read()
-
-					if (done) {
-						console.log('Event stream ended')
-						break
-					}
-
-					buffer += decoder.decode(value, { stream: true })
-					const lines = buffer.split('\n')
-					buffer = lines.pop() || '' // Keep the last incomplete line in the buffer
-
-					for (const line of lines) {
-						await this.processEventStreamLine(line)
-					}
-				}
-			} finally {
-				reader.releaseLock()
-			}
-		} catch (error) {
-			console.error('Event stream connection error:', error)
-			this.scheduleReconnect()
-		}
-	}
-
-	private async processEventStreamLine(line: string): Promise<void> {
-		if (!line.trim()) return
-
-		// Parse Server-Sent Events format
-		if (line.startsWith('data: ')) {
-			try {
-				const eventData = JSON.parse(line.substring(6))
-				// Reduce log noise - only log important events
-				if (eventData.type !== 'storage.write') {
-					console.log(`[DEBUG] Processing event: ${eventData.type}`)
-				}
-				await this.handleEvent(eventData)
-			} catch (error) {
-				console.error('Failed to parse event data:', error)
-				console.error('Raw line:', line)
-			}
-		}
-	}
-
-	private async handleEvent(event: EventStreamEvent): Promise<void> {
-		const { type, properties } = event
-
-		// Skip storage.write events - they're just noise
-		if (type === 'storage.write') return
-
-		// Only handle events for sessions we're monitoring
-		const sessionId =
-			properties?.info?.sessionID ||
-			properties?.part?.sessionID ||
-			properties?.sessionID
-
-		console.log(
-			`[DEBUG] Received event: ${type}, sessionId: ${sessionId}, monitoring: ${this.sessions.has(sessionId || '')}`
+		}).pipe(
+			Effect.catchAll((error) =>
+				Console.error(`Error processing event line: ${error}`)
+			)
 		)
 
-		if (!sessionId || !this.sessions.has(sessionId)) {
-			return
-		}
+	// Handle specific events
+	const handleEvent = (event: EventStreamEvent) =>
+		Effect.gen(function* () {
+			const { type, properties } = event
 
-		switch (type) {
-			case 'message.updated':
-				await this.handleMessageUpdated(sessionId, properties)
-				break
-			case 'message.part.updated':
-				await this.handleMessagePartUpdated(sessionId, properties)
-				break
-			default:
-				console.log(`[DEBUG] Ignoring event type: ${type}`)
-				break
-		}
-	}
+			// We only care about session.idle events
+			if (type !== 'session.idle') return
 
-	private async handleMessageUpdated(
-		sessionId: string,
-		properties: EventStreamEvent['properties']
-	): Promise<void> {
-		const messageInfo = properties.info
-		if (!messageInfo || messageInfo.role !== 'assistant') return
+			const sessionId = properties?.sessionID
+			if (!sessionId) return
 
-		console.log(
-			`[DEBUG] Message updated - messageID: ${messageInfo.id}, completed: ${!!messageInfo.time?.completed}`
-		)
+			const sessions = yield* Ref.get(sessionsRef)
+			const sessionData = sessions.get(sessionId)
 
-		// Check if message is completed (has time.completed)
-		if (
-			messageInfo.time?.completed &&
-			!this.sessions.get(sessionId)?.completedMessages.has(messageInfo.id)
-		) {
-			console.log(
-				`Assistant message ${messageInfo.id} completed for session ${sessionId}`
+			if (!sessionData) {
+				// Session not being monitored
+				return
+			}
+
+			yield* Console.log(
+				`Session ${sessionId} became idle, sending final message`
 			)
 
-			// Mark message as completed and send any remaining partial content
-			const sessionData = this.sessions.get(sessionId)
-			if (sessionData) {
-				sessionData.completedMessages.add(messageInfo.id)
-
-				// Send any remaining partial content first
-				const remainingContent = sessionData.partialMessages.get(messageInfo.id)
-				console.log(
-					`[DEBUG] Remaining content length: ${remainingContent?.length || 0}`
-				)
-
-				if (remainingContent?.trim()) {
-					console.log(`[DEBUG] Sending final remaining content`)
-					await this.sendPartialMessage(sessionData, remainingContent)
-				}
-
-				sessionData.partialMessages.delete(messageInfo.id) // Clean up partial content
-				console.log(`[DEBUG] Message ${messageInfo.id} processing completed`)
-			}
-		}
-	}
-
-	private async handleMessagePartUpdated(
-		sessionId: string,
-		properties: EventStreamEvent['properties']
-	): Promise<void> {
-		const partInfo = properties.part
-		if (!partInfo || partInfo.type !== 'text' || !partInfo.text) return
-
-		console.log(
-			`[DEBUG] Part updated - messageID: ${partInfo.messageID}, text length: ${partInfo.text.length}`
+			// Get the final message content and send it to Discord
+			yield* sendFinalMessage(sessionData, properties.message)
+		}).pipe(
+			Effect.catchAll((error) =>
+				Console.error(`Error handling event: ${error}`)
+			)
 		)
 
-		const sessionData = this.sessions.get(sessionId)
-		if (!sessionData) return
-
-		// Skip if this message is already completed
-		if (sessionData.completedMessages.has(partInfo.messageID)) return
-
-		// Get current partial content for this message
-		const currentContent =
-			sessionData.partialMessages.get(partInfo.messageID) || ''
-		const newContent = currentContent + partInfo.text
-
-		// Update the partial content
-		sessionData.partialMessages.set(partInfo.messageID, newContent)
-
-		console.log(
-			`[DEBUG] Updated partial content for message ${partInfo.messageID}, total length: ${newContent.length}`
-		)
-
-		// Check if the new content contains newlines that we haven't sent yet
-		const lines = newContent.split('\n')
-		if (lines.length > 1) {
-			// We have complete lines to send (all but the last incomplete line)
-			const completeLinesContent = lines.slice(0, -1).join('\n')
-			const remainingContent = lines[lines.length - 1]
-
-			console.log(`[DEBUG] Found ${lines.length - 1} complete lines to send`)
-
-			// Update partial content to only keep the remaining incomplete line
-			sessionData.partialMessages.set(partInfo.messageID, remainingContent)
-
-			// Send the complete lines to Discord
-			if (completeLinesContent.trim()) {
-				console.log(
-					`[DEBUG] Sending partial message with ${completeLinesContent.length} characters`
-				)
-				await this.sendPartialMessage(sessionData, completeLinesContent)
-			}
-		}
-	}
-
-	private async sendCompletedMessage(
+	// Send the final message to Discord when session becomes idle
+	const sendFinalMessage = (
 		sessionData: SessionData,
-		messageId: string
-	): Promise<void> {
-		if (!this.client) return
+		message?: { id: string; role: string; content: string }
+	) =>
+		Effect.gen(function* () {
+			if (!message || message.role !== 'assistant') return
 
-		try {
-			// Fetch the complete message from OpenCode API
-			const messageResult = await opencode.session.message({
-				path: { id: sessionData.sessionId, messageID: messageId }
+			const client = discordClient
+			if (!client) {
+				return yield* Effect.fail(
+					new SessionMonitorError({
+						message: 'Discord client not available'
+					})
+				)
+			}
+
+			const channel = yield* Effect.tryPromise({
+				catch: (error) =>
+					new SessionMonitorError({
+						cause: error,
+						message: 'Failed to fetch Discord channel'
+					}),
+				try: () => client.channels.fetch(sessionData.threadId)
 			})
 
-			if (messageResult.error) {
-				console.error(
-					`Error fetching completed message ${messageId}:`,
-					messageResult.error
+			if (!channel?.isTextBased()) {
+				return yield* Effect.fail(
+					new SessionMonitorError({
+						message: 'Channel is not text-based'
+					})
 				)
-				return
 			}
 
-			const message = messageResult.data as OpenCodeMessage
-			if (!message || message.info.role !== 'assistant') return
+			// Split message if it's too long (Discord limit is 2000 characters)
+			const messages = splitMessage(message.content, 2000)
 
-			// Find the thread
-			const thread = (await this.client.channels.fetch(
-				sessionData.threadId
-			)) as ThreadChannel
-
-			if (!thread) {
-				console.warn(
-					`Thread ${sessionData.threadId} not found, removing session ${sessionData.sessionId}`
-				)
-				this.removeSession(sessionData.sessionId)
-				return
+			for (const messageContent of messages) {
+				yield* Effect.tryPromise({
+					catch: (error) =>
+						new SessionMonitorError({
+							cause: error,
+							message: 'Failed to send message to Discord'
+						}),
+					try: () =>
+						(channel as ThreadChannel | TextChannel | NewsChannel).send(
+							messageContent
+						)
+				})
 			}
-
-			// Extract and send the complete text content
-			const textContent = this.extractTextFromParts(message.parts)
-
-			if (textContent?.trim()) {
-				// Split long messages to avoid Discord's 2000 character limit
-				const messageChunks = this.splitMessage(textContent, 2000)
-
-				for (const chunk of messageChunks) {
-					await thread.send(chunk)
-				}
-			}
-		} catch (error) {
-			console.error(`Error sending completed message ${messageId}:`, error)
-		}
-	}
-
-	private async sendPartialMessage(
-		sessionData: SessionData,
-		content: string
-	): Promise<void> {
-		if (!this.client) {
-			console.log('[DEBUG] No client available for sending partial message')
-			return
-		}
-
-		try {
-			console.log(
-				`[DEBUG] Attempting to send partial message to thread ${sessionData.threadId}`
+		}).pipe(
+			Effect.catchAll((error) =>
+				Console.error(`Error sending final message: ${error}`)
 			)
-
-			// Find the thread
-			const thread = (await this.client.channels.fetch(
-				sessionData.threadId
-			)) as ThreadChannel
-
-			if (!thread) {
-				console.warn(
-					`Thread ${sessionData.threadId} not found, removing session ${sessionData.sessionId}`
-				)
-				this.removeSession(sessionData.sessionId)
-				return
-			}
-
-			console.log(`[DEBUG] Found thread: ${thread.name}`)
-
-			if (content.trim()) {
-				// Split long messages to avoid Discord's 2000 character limit
-				const messageChunks = this.splitMessage(content, 2000)
-
-				console.log(`[DEBUG] Sending ${messageChunks.length} message chunks`)
-
-				for (const chunk of messageChunks) {
-					console.log(`[DEBUG] Sending chunk with ${chunk.length} characters`)
-					await thread.send(chunk)
-					console.log(`[DEBUG] Chunk sent successfully`)
-				}
-			}
-		} catch (error) {
-			console.error(`Error sending partial message:`, error)
-		}
-	}
-
-	private scheduleReconnect(): void {
-		if (this.reconnectAttempts >= this.MAX_RECONNECT_ATTEMPTS) {
-			console.error(
-				'Max reconnection attempts reached, falling back to polling'
-			)
-			this.startFallbackPolling()
-			return
-		}
-
-		this.reconnectAttempts++
-		console.log(
-			`Scheduling reconnect attempt ${this.reconnectAttempts} in ${this.RECONNECT_DELAY_MS}ms`
 		)
 
-		setTimeout(() => {
-			this.startEventStream()
-		}, this.RECONNECT_DELAY_MS)
-	}
-
-	private startFallbackPolling(): void {
-		if (this.fallbackPollInterval) {
-			return
-		}
-
-		console.log('Starting fallback polling mode')
-		this.usingFallback = true
-
-		this.fallbackPollInterval = setInterval(async () => {
-			await this.checkAllSessionsForUpdates()
-		}, this.FALLBACK_POLL_INTERVAL_MS)
-
-		// Do an immediate check
-		this.checkAllSessionsForUpdates()
-	}
-
-	private async checkAllSessionsForUpdates(): Promise<void> {
-		if (!this.client || this.sessions.size === 0) return
-
-		const sessionsToCheck = Array.from(this.sessions.values())
-
-		for (const sessionData of sessionsToCheck) {
-			try {
-				await this.checkSessionForCompletedMessages(sessionData)
-			} catch (error) {
-				console.error(`Error checking session ${sessionData.sessionId}:`, error)
-			}
-		}
-	}
-
-	private async checkSessionForCompletedMessages(
-		sessionData: SessionData
-	): Promise<void> {
-		try {
-			const messagesResult = await opencode.session.messages({
-				path: { id: sessionData.sessionId }
-			})
-
-			if (messagesResult.error) {
-				console.error(
-					`Error fetching messages for session ${sessionData.sessionId}:`,
-					messagesResult.error
-				)
-				return
-			}
-
-			const messages = messagesResult.data || []
-
-			// Only process completed assistant messages that we haven't sent yet
-			for (const message of messages) {
-				if (
-					message.info.role === 'assistant' &&
-					message.info.time?.completed &&
-					!sessionData.completedMessages.has(message.info.id)
-				) {
-					sessionData.completedMessages.add(message.info.id)
-					// For fallback polling, we send the complete message since we don't have streaming parts
-					await this.sendCompletedMessage(sessionData, message.info.id)
-				}
-			}
-
-			sessionData.lastChecked = new Date()
-		} catch (error) {
-			console.error(
-				`Error in checkSessionForCompletedMessages for ${sessionData.sessionId}:`,
-				error
-			)
-		}
-	}
-
-	private extractTextFromParts(
-		parts: Array<{ type: string; text?: string }>
-	): string {
-		return parts
-			.filter((part) => part.type === 'text' && part.text)
-			.map((part) => part.text || '')
-			.join('\n')
-			.trim()
-	}
-
-	private splitMessage(text: string, maxLength: number): string[] {
+	// Helper function to split long messages
+	const splitMessage = (text: string, maxLength: number): string[] => {
 		if (text.length <= maxLength) return [text]
 
 		const messages: string[] = []
@@ -527,55 +279,131 @@ class SessionMonitor {
 		const lines = text.split('\n')
 
 		for (const line of lines) {
-			if (currentMessage.length + line.length + 1 <= maxLength) {
-				currentMessage += (currentMessage ? '\n' : '') + line
-			} else {
+			if (currentMessage.length + line.length + 1 > maxLength) {
 				if (currentMessage) {
-					messages.push(currentMessage)
-					currentMessage = line
-				} else {
-					// Line is too long, split it
-					const chunks = line.match(
-						new RegExp(`.{1,${maxLength - 1}}`, 'g')
-					) || [line]
-					messages.push(...chunks)
+					messages.push(currentMessage.trim())
+					currentMessage = ''
 				}
+
+				// If single line is too long, split it
+				if (line.length > maxLength) {
+					let remaining = line
+					while (remaining.length > maxLength) {
+						messages.push(remaining.substring(0, maxLength))
+						remaining = remaining.substring(maxLength)
+					}
+					if (remaining) {
+						currentMessage = remaining
+					}
+				} else {
+					currentMessage = line
+				}
+			} else {
+				currentMessage += (currentMessage ? '\n' : '') + line
 			}
 		}
 
 		if (currentMessage) {
-			messages.push(currentMessage)
+			messages.push(currentMessage.trim())
 		}
 
 		return messages
 	}
 
-	stop(): void {
-		if (this.eventSource) {
-			this.eventSource.close()
-			this.eventSource = null
-		}
+	// Start the event stream monitoring
+	const startEventStream = Effect.gen(function* () {
+		const eventUrl = `${apiUrl}/event`
 
-		if (this.fallbackPollInterval) {
-			clearInterval(this.fallbackPollInterval)
-			this.fallbackPollInterval = null
-		}
+		yield* pipe(
+			connectToEventStream(eventUrl),
+			Effect.retry(
+				Schedule.exponential('1 seconds').pipe(
+					Schedule.compose(Schedule.recurs(5))
+				)
+			),
+			Effect.catchAll((error) =>
+				Console.error(`Failed to start event stream after retries: ${error}`)
+			),
+			Effect.fork
+		)
+	})
 
-		console.log('Session monitor stopped')
+	return {
+		addSession: (threadId: string, sessionId: string) =>
+			Effect.gen(function* () {
+				const sessions = yield* Ref.get(sessionsRef)
+				const newSessions = new Map(sessions)
+				newSessions.set(sessionId, { sessionId, threadId })
+				yield* Ref.set(sessionsRef, newSessions)
+				yield* Console.log(
+					`Added session ${sessionId} for thread ${threadId} to monitor`
+				)
+			}),
+
+		getActiveSessionsCount: () =>
+			Effect.gen(function* () {
+				const sessions = yield* Ref.get(sessionsRef)
+				return sessions.size
+			}),
+
+		getSessionInfo: () =>
+			Effect.gen(function* () {
+				const sessions = yield* Ref.get(sessionsRef)
+				return Array.from(sessions.values())
+			}),
+
+		removeSession: (sessionId: string) =>
+			Effect.gen(function* () {
+				const sessions = yield* Ref.get(sessionsRef)
+				const newSessions = new Map(sessions)
+				newSessions.delete(sessionId)
+				yield* Ref.set(sessionsRef, newSessions)
+				yield* Console.log(`Removed session ${sessionId} from monitor`)
+			}),
+		setDiscordClient,
+
+		start: () =>
+			Effect.gen(function* () {
+				const isRunning = yield* Ref.get(isRunningRef)
+				if (isRunning) {
+					yield* Console.log('Session monitor already running')
+					return
+				}
+
+				yield* Ref.set(isRunningRef, true)
+				yield* startEventStream
+				yield* Console.log('Session monitor started')
+			}),
+
+		stop: () =>
+			Effect.gen(function* () {
+				yield* Ref.set(isRunningRef, false)
+				yield* Console.log('Session monitor stopped')
+			})
 	}
+}) // Layer that provides the SessionMonitor service
+export const SessionMonitorLive = Layer.effect(
+	SessionMonitor,
+	makeSessionMonitor
+)
 
-	getActiveSessionsCount(): number {
-		return this.sessions.size
-	}
-
-	getSessionInfo(): SessionData[] {
-		return Array.from(this.sessions.values())
-	}
-
-	isUsingFallback(): boolean {
-		return this.usingFallback
+// Legacy exports for compatibility (will be updated in implementation files)
+export const sessionMonitor = {
+	addSession: () => {
+		throw new Error('Use Effect-based SessionMonitor service instead')
+	},
+	getActiveSessionsCount: () => {
+		throw new Error('Use Effect-based SessionMonitor service instead')
+	},
+	getSessionInfo: () => {
+		throw new Error('Use Effect-based SessionMonitor service instead')
+	},
+	isUsingFallback: () => {
+		throw new Error('Use Effect-based SessionMonitor service instead')
+	},
+	removeSession: () => {
+		throw new Error('Use Effect-based SessionMonitor service instead')
 	}
 }
 
-export const sessionMonitor = new SessionMonitor()
 export type { SessionData }

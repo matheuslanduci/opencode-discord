@@ -15,7 +15,7 @@ const button = new Button({ id: /^stop-session#\w+$/ })
 export function createStopSessionButton(sessionId: string) {
 	return new ButtonBuilder()
 		.setCustomId(`stop-session#${sessionId}`)
-		.setLabel('Stop Session')
+		.setLabel('Abort')
 		.setEmoji('🛑')
 		.setStyle(ButtonStyle.Secondary)
 }
