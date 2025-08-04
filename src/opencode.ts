@@ -1,12 +1,10 @@
 import { createOpencodeClient, type Session } from '@opencode-ai/sdk'
 import { Config, Context, Data, Effect, Layer } from 'effect'
 
-// export const opencode = createOpencodeClient({
-// 	baseUrl: env.OPENCODE_API_URL
-// })
 export class Opencode extends Context.Tag('Opencode')<
 	Opencode,
 	{
+		readonly createSession: () => Effect.Effect<Session, OpencodeError>
 		readonly getSessions: () => Effect.Effect<Session[], OpencodeError>
 	}
 >() {}
@@ -25,6 +23,18 @@ export const OpencodeLive = Layer.effect(
 		})
 
 		return Opencode.of({
+			createSession: () =>
+				Effect.tryPromise({
+					catch: () =>
+						new OpencodeError({ message: 'Failed to create session' }),
+					try: async () => {
+						const { data } = await opencode.session.create({
+							throwOnError: true
+						})
+
+						return data
+					}
+				}),
 			getSessions: () =>
 				Effect.tryPromise({
 					catch: () =>

@@ -1,6 +1,6 @@
 import type { Session } from '@opencode-ai/sdk'
 import { MessageFlags } from 'discord.js'
-import { Effect } from 'effect'
+import { Console, Effect } from 'effect'
 import { execute, Slash } from 'sunar'
 import { AppRuntime } from '~/app-runtime'
 import { DiscordError } from '~/discord'
@@ -29,12 +29,7 @@ execute(slash, async (interaction) =>
 		}).pipe(
 			Effect.catchTags({
 				DiscordError: (error: DiscordError) =>
-					Effect.promise(() =>
-						interaction.reply({
-							content: error.message,
-							flags: [MessageFlags.Ephemeral]
-						})
-					),
+					Console.error('Discord error:', error.message),
 				OpencodeError: (error: OpencodeError) =>
 					Effect.promise(() =>
 						interaction.reply({
