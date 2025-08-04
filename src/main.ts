@@ -1,40 +1,27 @@
+import { GatewayIntentBits } from 'discord.js'
+import { Config, Effect } from 'effect'
 import { Client, load } from 'sunar'
-import { env } from './env'
-import { modelsService } from './services/models'
-import { sessionMonitor } from './services/session-monitor'
+import { AppRuntime } from './app-runtime'
 
-const components = [
-	'commands',
-	'signals',
-	'autocompletes',
-	'buttons',
-	'modals',
-	'context-menus',
-	'groups',
-	'protectors',
-	'select-menus'
-]
+const models = ['sessions']
 
-async function main() {
+const program = Effect.gen(function* () {
+	const token = yield* Config.string('DISCORD_BOT_TOKEN')
+	const nodeEnv = yield* Config.literal('production', 'development')('NODE_ENV')
+
 	const client = new Client({
-		intents: ['Guilds', 'GuildMessages', 'MessageContent']
+		intents: [
+			GatewayIntentBits.Guilds,
+			GatewayIntentBits.GuildMessages,
+			GatewayIntentBits.MessageContent
+		]
 	})
 
-	// Initialize models service
-	await modelsService.initialize()
+	const mainFolder = nodeEnv === 'production' ? 'dist' : 'src'
 
-	const mainFolder = process.env.NODE_ENV === 'production' ? 'dist' : 'src'
+	yield* Effect.promise(() => load(`${mainFolder}/**/*.{slash,signal}.{js,ts}`))
 
-	await load(`${mainFolder}/{${components.join(',')}}/**/*.{js,ts}`)
+	yield* Effect.promise(() => client.login(token))
+})
 
-	// Initialize session monitor after client login
-	await client.login(env.DISCORD_BOT_TOKEN)
-
-	// Initialize and start session monitor
-	sessionMonitor.initialize(client)
-	sessionMonitor.start()
-
-	return client
-}
-
-main().catch(console.error)
+AppRuntime.runPromise(program)

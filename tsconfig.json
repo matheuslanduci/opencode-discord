@@ -1,11 +1,14 @@
 {
 	"compilerOptions": {
 		"baseUrl": ".",
+		"downlevelIteration": true,
 		"module": "esnext",
 		"moduleResolution": "bundler",
+		"noUncheckedIndexedAccess": true,
 		"paths": {
 			"~/*": ["./src/*"]
 		},
+		"strict": true,
 		"target": "esnext"
 	}
 }
